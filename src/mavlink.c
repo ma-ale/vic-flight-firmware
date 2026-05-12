@@ -2,6 +2,11 @@
 #include "mavlink.h"
 #include <mavlink/common/mavlink.h>
 
+/**
+ ** Authors: Enrico Lumetti
+ ** Simple mavlink layer for telemetry
+ */
+
 #define SYSTEM_ID 10
 
 static mavlink_status_t status;
@@ -72,7 +77,6 @@ void send_sys_status() {
                            //| MAV_SYS_STATUS_SENSOR_3D_GYRO
                            //| MAV_SYS_STATUS_SENSOR_3D_ACCEL
                            //| MAV_SYS_STATUS_SENSOR_GPS
-                           //| MAV_SYS_STATUS_AHRS;
 
     mavlink_sys_status_t ss = {
         .onboard_control_sensors_present = sensors,

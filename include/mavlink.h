@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ ** Authors: Enrico Lumetti
+ ** Simple mavlink layer for telemetry
+ */
+
 #include <stdbool.h>
 
 #ifdef __cplusplus
