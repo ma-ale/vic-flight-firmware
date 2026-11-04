@@ -1,6 +1,7 @@
 #include <Adafruit_AHRS.h>
 #include <Arduino.h>
 #include <FreeRTOS.h>
+#include <sbus.h>
 
 #include "Bluetooth.hpp"
 #include "KalmanFilter.hpp"
@@ -24,6 +25,9 @@ Adafruit_Mahony orientation;
 // the parachute
 KalmanFilter altitude;
 
+// sbus to read the radio controller input
+bfs::SbusRx sbus(&Serial2, RC_SBUS, -1, true);
+
 // Enables SD card writing
 static bool enable_sd_card = true;
 static int64_t setup_finished_time_ms;
@@ -33,8 +37,6 @@ static bool imu_healthy = true;
 static bool baro_healthy = true;
 static bool airbrake_active = false;
 bool system_armed = true; // FIXME: SYSTEM SHOULD BE STARTED DISARMED
-
-float _pressure = 0, _attitude_rad = 0;
 
 // calibration
 float gx_bias = 0;
@@ -50,6 +52,7 @@ DECLARE_STATIC_SEMAPHORE(i2c_semaphore);
 DECLARE_STATIC_SEMAPHORE(altitude_semaphore);
 
 DECLARE_STATIC_TASK(imu_task);
+DECLARE_STATIC_TASK(sbus_task);
 DECLARE_STATIC_TASK(barometer_task);
 DECLARE_STATIC_TASK_STACK(gps_task, TASK_STACK_2K);
 DECLARE_STATIC_TASK(lora_transmitter_task);
@@ -230,6 +233,7 @@ void setup(void)
 
 	/* ======================== TASKS INITIALIZATION ======================== */
 	// Core 0 tasks
+	INIT_STATIC_TASK(sbus_task, "sbus", NULL, tskIDLE_PRIORITY + 11, 0);
 	INIT_STATIC_TASK(imu_task, "imu", NULL, tskIDLE_PRIORITY + 10, 0);
 	INIT_STATIC_TASK(barometer_task, "barometer", NULL, tskIDLE_PRIORITY + 9, 0);
 	INIT_STATIC_TASK(gps_task, "gps", NULL, tskIDLE_PRIORITY + 7, 0);
@@ -242,11 +246,17 @@ void setup(void)
 	INIT_STATIC_TASK(ble_formatter_task, "ble formatter", NULL, tskIDLE_PRIORITY + 5, 1);
 	INIT_STATIC_TASK(uart_task, "logger", NULL, tskIDLE_PRIORITY, 1);
 
-	if (!TASK_IS_INITIALIZED(imu_task) || !TASK_IS_INITIALIZED(barometer_task) ||
-	    !TASK_IS_INITIALIZED(gps_task) || !TASK_IS_INITIALIZED(uart_task) ||
-	    !TASK_IS_INITIALIZED(lora_transmitter_task) || !TASK_IS_INITIALIZED(lora_formatter_task) ||
-	    !TASK_IS_INITIALIZED(sd_formatter_task) || !TASK_IS_INITIALIZED(ble_formatter_task) ||
-	    !TASK_IS_INITIALIZED(cmd_handler_task) || !TASK_IS_INITIALIZED(sd_writer_task)) {
+	if (!TASK_IS_INITIALIZED(sbus_task)             ||
+	    !TASK_IS_INITIALIZED(imu_task)              ||
+	    !TASK_IS_INITIALIZED(barometer_task)        ||
+	    !TASK_IS_INITIALIZED(gps_task)              ||
+	    !TASK_IS_INITIALIZED(uart_task)             ||
+	    !TASK_IS_INITIALIZED(lora_transmitter_task) ||
+	    !TASK_IS_INITIALIZED(lora_formatter_task)   ||
+	    !TASK_IS_INITIALIZED(sd_formatter_task)     ||
+	    !TASK_IS_INITIALIZED(ble_formatter_task)    ||
+	    !TASK_IS_INITIALIZED(cmd_handler_task)      ||
+	    !TASK_IS_INITIALIZED(sd_writer_task)) {
 		while (true) {
 			Serial.println("Error creating tasks");
 			delay(500);
@@ -312,6 +322,18 @@ void loop(void)
 }
 
 
+TASK sbus_task(TaskDescriptor_t* self)
+{
+	self->last_wake = xTaskGetTickCount();
+	sbus.Begin();
+
+	while (true) {
+		sbus.Read();
+		vTaskDelay(1);
+	}
+}
+
+
 TASK imu_task(TaskDescriptor_t* self)
 {
 	self->last_wake = xTaskGetTickCount();
@@ -352,7 +374,6 @@ TASK imu_task(TaskDescriptor_t* self)
 				float vertical_accel = 2*(qx*qz - qw*qy) * ax + 2*(qy*qz + qw*qx) * ay + (1 - 2*(qx*qx + qy*qy)) * az;
 				// TODO: airbrake trigger
 				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
-					_attitude_rad = attitude_rad;
 					altitude.predict(vertical_accel, attitude_rad, airbrake_active, true);
 					xSemaphoreGive(altitude_semaphore);
 				}
@@ -396,7 +417,6 @@ TASK barometer_task(TaskDescriptor_t* self)
 			if (sample.error_status == 0) {
 				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
 					altitude.update(sample.altitude);
-					_pressure = sample.pressure;
 					xSemaphoreGive(altitude_semaphore);
 				}
 			} else {
