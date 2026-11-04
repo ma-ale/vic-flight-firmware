@@ -7,50 +7,49 @@
 #define SPI2_SCK  12
 
 // I2C1 Bus
-#define I2C1_SDA 42
-#define I2C1_SCL 45
-#define I2C2_SDA 16
-#define I2C2_SCL 21
+#define I2C1_SDA 36
+#define I2C1_SCL 35
 
 // IMU Pins
-#define IMU_CS    15
-#define IMU_INT1  10
+#define IMU_INT1  37
 
 // LoRa Pins
-#define LORA_BUSY 5
-#define LORA_RST  6
-#define LORA_DIO1 7
+#define LORA_BUSY 21
+#define LORA_RST  47
+#define LORA_DIO1 48
 #define LORA_CS   14
 
-// UART2, GPS Pins
-#define GPS_TX    17
-#define GPS_RX    18
+// RC Receiver Pins
+#define RC_SBUS 38
+
+// GPS Pins
+// GPS is on UART0, keep default pins
+#define GPS_RST 1
+#define GPS_PPS 2
 
 // SD Pins
-#define SD_CLK_PIN 46
-#define SD_CMD_PIN 47
-#define SD_D0_PIN  48
+#define SD_CLK_PIN 18
+#define SD_CMD_PIN 8
+#define SD_D0_PIN  17
 
-// Peripheral Pins
-#define PINT1_HS 3  // J3
-#define PINT1_LS 4  // J3
-#define PINT2_HS 39 // J4
-#define PINT2_LS 38 // J4
-#define PINT3_HS 41 // J5
-#define PINT3_LS 40 // J5
-#define PINT4_LS 35 // J12
-#define PINT5_LS 36 // J13
-#define PINT6_LS 37 // J14
+// Sensor Peripherals
+#define RPM_SENSE  3
+#define TEMP_ADC1  6
+#define TEMP_ADC2  7
+#define VSENSE_ADC 4
+#define ISENSE_ADC 5
 
-// Peripheral assignation
-#define PIN_CUTTER_1 PINT2_LS
-#define PIN_CUTTER_2 PINT6_LS
-#define PIN_DBG_LED  PINT5_LS
-#define PIN_CAMERA1  PINT3_LS
-#define PIN_CAMERA2  PINT4_LS
-#define PIN_SERVO    PINT1_HS
-// J7 battery I2C, SCA2, SCL2
+// ESC Pins
+#define ESC_FORWARD 39
+#define ESC_REVERSE 40
 
+// Servo Pins
+#define SRV_FLAP_L 16
+#define SRV_FLAP_R 41
+#define SRV_AILE_L 15
+#define SRV_AILE_R 42
+#define SRV_TAIL_L 9
+#define SRV_TAIL_R 10
 
 // Task Timings
 #define IMU_TASK_HZ       100

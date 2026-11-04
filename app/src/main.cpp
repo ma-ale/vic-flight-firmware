@@ -1,7 +1,6 @@
 #include <Adafruit_AHRS.h>
 #include <Arduino.h>
 #include <FreeRTOS.h>
-#include <INA226.h>
 
 #include "Bluetooth.hpp"
 #include "KalmanFilter.hpp"
@@ -13,16 +12,10 @@
 #include "lora.h"
 #include "sdcard.h"
 #include "task.h"
-#include "airbrake.hpp"
-
-#if TEST_FAKE_DATA == 1
-#include "test_synthetic_data.h"
-#endif
 
 
 SPIClass SPI2(FSPI);
 TwoWire I2C1(0);
-TwoWire I2C2(2);
 
 // State filter for orientation estimation, used in the IMU task
 Adafruit_Mahony orientation;
@@ -31,44 +24,15 @@ Adafruit_Mahony orientation;
 // the parachute
 KalmanFilter altitude;
 
-// Airbrake servo, driven directly by LEDC (ESP32Servo hung in attach()).
-// Channel 0 / timer 0: analogWrite() allocates channels from the top (7, 6, ...)
-#define SERVO_LEDC_CHANNEL 0
-#define SERVO_LEDC_FREQ_HZ 50
-#define SERVO_LEDC_BITS    14
-static volatile bool servo_ready = false;
-
-static void servo_init(void)
-{
-	ledcSetup(SERVO_LEDC_CHANNEL, SERVO_LEDC_FREQ_HZ, SERVO_LEDC_BITS);
-	ledcAttachPin(PIN_SERVO, SERVO_LEDC_CHANNEL);
-	servo_ready = true;
-}
-
-// Same semantics as Servo::write(): 0-180 degrees mapped on SERVO_MIN_US..SERVO_MAX_US
-static void servo_write_deg(float deg)
-{
-	if (!servo_ready) return;
-	deg = constrain(deg, 0.0f, 180.0f);
-	uint32_t us = SERVO_MIN_US + (uint32_t)(deg / 180.0f * (SERVO_MAX_US - SERVO_MIN_US));
-	uint32_t period_us = 1000000 / SERVO_LEDC_FREQ_HZ;
-	ledcWrite(SERVO_LEDC_CHANNEL, (us << SERVO_LEDC_BITS) / period_us);
-}
-
-// Current sensor
-INA226 INA(0x40, &I2C2);
-
-
 // Enables SD card writing
 static bool enable_sd_card = true;
-static int64_t setup_finished_time_ms; 
+static int64_t setup_finished_time_ms;
 
 // flags
 static bool imu_healthy = true;
 static bool baro_healthy = true;
 static bool airbrake_active = false;
 bool system_armed = true; // FIXME: SYSTEM SHOULD BE STARTED DISARMED
-static RocketState rocket_state = RS_IDLE; // copy of the parachute task state, read by the command handler
 
 float _pressure = 0, _attitude_rad = 0;
 
@@ -87,7 +51,6 @@ DECLARE_STATIC_SEMAPHORE(altitude_semaphore);
 
 DECLARE_STATIC_TASK(imu_task);
 DECLARE_STATIC_TASK(barometer_task);
-DECLARE_STATIC_TASK(parachute_task);
 DECLARE_STATIC_TASK_STACK(gps_task, TASK_STACK_2K);
 DECLARE_STATIC_TASK(lora_transmitter_task);
 DECLARE_STATIC_TASK(lora_formatter_task);
@@ -96,7 +59,6 @@ DECLARE_STATIC_TASK(sd_formatter_task);
 DECLARE_STATIC_TASK_STACK(sd_writer_task, TASK_STACK_2K);
 DECLARE_STATIC_TASK(ble_formatter_task);
 DECLARE_STATIC_TASK_STACK(cmd_handler_task, TASK_STACK_2K);
-DECLARE_STATIC_TASK_STACK(ina_task, TASK_STACK_2K);
 
 DECLARE_STATIC_QUEUE(parachute_msg_queue, LogMessage, LOG_DEFAULT_QUEUE_SIZE);
 DECLARE_STATIC_QUEUE(sd_msg_queue, LogMessage, LOG_DEFAULT_QUEUE_SIZE);
@@ -149,23 +111,18 @@ void setup(void)
 	//	}
 	Serial.println("Initialized");
 	Serial.printf("DBG reset reason: %d\n", (int)esp_reset_reason());
+/*
 	pinMode(PIN_DBG_LED, OUTPUT);
 	digitalWrite(PIN_DBG_LED, HIGH);
 	delay(200);
 	digitalWrite(PIN_DBG_LED, LOW);
-
+*/
 
 	I2C1.setPins(I2C1_SDA, I2C1_SCL);
 	I2C1.begin();
 	I2C1.setClock(100000);
 
-	I2C2.setPins(I2C2_SDA, I2C2_SCL);
-	I2C2.begin();
-	I2C2.setClock(100000);
-
 	// put all chip selects high, the individual setup calls will handle them later
-	pinMode(IMU_CS, OUTPUT);
-	digitalWrite(IMU_CS, HIGH);
 	pinMode(LORA_CS, OUTPUT);
 	digitalWrite(LORA_CS, HIGH);
 
@@ -271,13 +228,10 @@ void setup(void)
 
 	gps_setup();
 
-	INA.begin();
-
 	/* ======================== TASKS INITIALIZATION ======================== */
 	// Core 0 tasks
 	INIT_STATIC_TASK(imu_task, "imu", NULL, tskIDLE_PRIORITY + 10, 0);
 	INIT_STATIC_TASK(barometer_task, "barometer", NULL, tskIDLE_PRIORITY + 9, 0);
-	INIT_STATIC_TASK(parachute_task, "parachute", NULL, tskIDLE_PRIORITY + 8, 0);
 	INIT_STATIC_TASK(gps_task, "gps", NULL, tskIDLE_PRIORITY + 7, 0);
 	// Core 1 tasks
 	INIT_STATIC_TASK(sd_formatter_task, "sd formatter", NULL, tskIDLE_PRIORITY + 10, 1);
@@ -286,15 +240,13 @@ void setup(void)
 	INIT_STATIC_TASK(lora_transmitter_task, "lora transmitter", NULL, tskIDLE_PRIORITY + 7, 1);
 	INIT_STATIC_TASK(cmd_handler_task, "cmd handler", NULL, tskIDLE_PRIORITY + 6, 1);
 	INIT_STATIC_TASK(ble_formatter_task, "ble formatter", NULL, tskIDLE_PRIORITY + 5, 1);
-	INIT_STATIC_TASK(ina_task, "ina", NULL, tskIDLE_PRIORITY + 4, 1);
 	INIT_STATIC_TASK(uart_task, "logger", NULL, tskIDLE_PRIORITY, 1);
 
 	if (!TASK_IS_INITIALIZED(imu_task) || !TASK_IS_INITIALIZED(barometer_task) ||
-	    !TASK_IS_INITIALIZED(parachute_task) || !TASK_IS_INITIALIZED(gps_task) || !TASK_IS_INITIALIZED(uart_task) ||
+	    !TASK_IS_INITIALIZED(gps_task) || !TASK_IS_INITIALIZED(uart_task) ||
 	    !TASK_IS_INITIALIZED(lora_transmitter_task) || !TASK_IS_INITIALIZED(lora_formatter_task) ||
 	    !TASK_IS_INITIALIZED(sd_formatter_task) || !TASK_IS_INITIALIZED(ble_formatter_task) ||
-	    !TASK_IS_INITIALIZED(cmd_handler_task) || !TASK_IS_INITIALIZED(sd_writer_task) ||
-	    !TASK_IS_INITIALIZED(ina_task)) {
+	    !TASK_IS_INITIALIZED(cmd_handler_task) || !TASK_IS_INITIALIZED(sd_writer_task)) {
 		while (true) {
 			Serial.println("Error creating tasks");
 			delay(500);
@@ -302,14 +254,15 @@ void setup(void)
 	}
 
 	Serial.println("Tasks created");
+/*
 	digitalWrite(PIN_DBG_LED, HIGH);
 	delay(200);
 	digitalWrite(PIN_DBG_LED, LOW);
+*/
 
 
 	// Register consumer tasks to the logger, these tasks will get notified when
 	// new data is ready to be read
-	logger_register_consumer(parachute_task_descriptor.handle, parachute_msg_queue, 0xffff, T_FILTER_STATE);
 	logger_register_consumer(lora_formatter_task_descriptor.handle, lora_msg_queue, 0xffff, 0xffff);
 	logger_register_consumer(sd_formatter_task_descriptor.handle, sd_msg_queue, 0xffff, 0xffff);
 	logger_register_consumer(uart_task_descriptor.handle, uart_msg_queue, 0xffff, 0xffff);
@@ -318,38 +271,13 @@ void setup(void)
 
 
 	/* ====================== PERIPHERAL INITIALIZATION ===================== */
-	pinMode(PINT1_HS, OUTPUT);
-	pinMode(PINT1_LS, OUTPUT);
-	digitalWrite(PINT1_LS, LOW);
-	Serial.println("DBG B1: PINT1 ok");
-	pinMode(PINT2_HS, INPUT);
-	pinMode(PINT2_LS, OUTPUT);
-	digitalWrite(PINT2_LS, LOW);
-	Serial.println("DBG B2: PINT2 ok");
-	pinMode(PINT3_HS, INPUT);
-	pinMode(PINT3_LS, OUTPUT);
-	digitalWrite(PINT3_LS, LOW);
-	Serial.println("DBG B3: PINT3 ok");
-	pinMode(PINT4_LS, OUTPUT);
-	digitalWrite(PINT4_LS, LOW);
-	Serial.println("DBG B4: PINT4 ok");
-	pinMode(PINT5_LS, OUTPUT);
-	digitalWrite(PINT5_LS, LOW);
-	Serial.println("DBG B5: PINT5 ok");
-	pinMode(PINT6_LS, OUTPUT);
-	digitalWrite(PINT6_LS, LOW);
-	Serial.println("DBG B6: PINT6 ok");
+	// TODO
 
 	/* ======================== SERVO INITIALIZATION ======================== */
-	Serial.println("DBG C0: before servo_init");
-	servo_init();
-	Serial.println("DBG C: servo attached");
-	servo_write_deg(0);
-	Serial.println("DBG D: servo written");
+	// TODO
 
-
-	Serial.println("Before blink");
 	// Blink to confirm end of setup
+/*
 	digitalWrite(PIN_DBG_LED, HIGH);
 	delay(200);
 	digitalWrite(PIN_DBG_LED, LOW);
@@ -366,6 +294,7 @@ void setup(void)
 	delay(200);
 	digitalWrite(PIN_DBG_LED, LOW);
 	delay(200);
+*/
 
 	setup_finished_time_ms = millis();
 }
@@ -374,21 +303,12 @@ void setup(void)
 // Heartbeat
 void loop(void)
 {
-	Serial.printf("DBG loop alive %lu\n", millis());
+/*
 	digitalWrite(PIN_DBG_LED, HIGH);
 	delay(1000);
 	digitalWrite(PIN_DBG_LED, LOW);
+*/
 	delay(1000);
-}
-
-
-TASK ina_task(TaskDescriptor_t* self)
-{
-	self->last_wake = xTaskGetTickCount();
-	while (true) {
-		log(S_OTHER, T_SYSLOG, INA.getBusVoltage(), INA.getCurrent());
-		delay(100);
-	}
 }
 
 
@@ -398,12 +318,8 @@ TASK imu_task(TaskDescriptor_t* self)
 	FIFO_Sample sample;
 	orientation.begin(IMU_TASK_HZ);
 
-#if TEST_FAKE_DATA == 1
-	uint32_t start_time = millis();
-#endif
-
 	while (true) {
-		if (xSemaphoreTake(spi_semaphore, portMAX_DELAY) == pdTRUE) {
+		if (xSemaphoreTake(i2c_semaphore, portMAX_DELAY) == pdTRUE) {
 			if (imu_get_sample(&sample) == 0) {
 				float ax = (float)sample.accelerometer[0] / 1000.0f;
 				float ay = (float)sample.accelerometer[1] / 1000.0f;
@@ -411,12 +327,14 @@ TASK imu_task(TaskDescriptor_t* self)
 				float gx = ((float)sample.gyroscope[0] - gx_bias) / 1000.0f;
 				float gy = ((float)sample.gyroscope[1] - gy_bias) / 1000.0f;
 				float gz = ((float)sample.gyroscope[2] - gz_bias) / 1000.0f;
-			
+
+/*
 				//first minute after setup check sensor health
 				if (millis() - setup_finished_time_ms < GROUND_CHECK_TIMER_MS) {
 					imu_healthy = is_imu_healthy_ground(ax, ay, az, gx, gy, gz);
 					if (!imu_healthy) 	log(S_OTHER, T_SYSLOG, "IMU not healthy");
 				}
+*/
 
 				// Mahony filter quaternions
 				float qw, qx, qy, qz;
@@ -438,56 +356,12 @@ TASK imu_task(TaskDescriptor_t* self)
 					altitude.predict(vertical_accel, attitude_rad, airbrake_active, true);
 					xSemaphoreGive(altitude_semaphore);
 				}
-				
-#if TEST_FAKE_DATA != 1
+
 				Vector3f fs = altitude.getState();
 				log(S_IMU, T_ORIENTATION, orientation.getRoll(), orientation.getPitch(), orientation.getYaw());
 				log(S_IMU, T_ACCELLERATION, sample.accelerometer[0], sample.accelerometer[1], sample.accelerometer[2]);
 				log(S_IMU, T_GYRO, gx, gy, gz);
 				log(S_IMU, T_FILTER_STATE, fs[0], fs[1], fs[2]);
-#else
-				const uint32_t IDLE_TIME = 5000;
-				auto get_sample = [&] {
-					uint32_t current_time = millis() - start_time;
-					if (current_time <= test_data[0].time + IDLE_TIME) {
-						return test_data[0];
-					}
-
-					if (current_time >= test_data[TEST_DATA_LEN - 1].time) {
-						return test_data[TEST_DATA_LEN - 1];
-					}
-
-					for (size_t i = 0; i < TEST_DATA_LEN - 1; i++) {
-						if (current_time >= test_data[i].time && current_time < test_data[i + 1].time) {
-							uint32_t t0 = test_data[i].time;
-							uint32_t t1 = test_data[i + 1].time;
-
-							// Calculate progress fraction between t0 and t1 (0.0 to 1.0)
-							float fraction = (float)(current_time - t0) / (float)(t1 - t0);
-
-							auto lerp = [](float start, float end, float frac) { return start + frac * (end - start); };
-
-							struct DataSample result;
-							result.z_alt = lerp(test_data[i].z_alt, test_data[i + 1].z_alt, fraction);
-							result.z_speed = lerp(test_data[i].z_speed, test_data[i + 1].z_speed, fraction);
-							result.z_acc = lerp(test_data[i].z_acc, test_data[i + 1].z_acc, fraction);
-
-							return result;
-						}
-					}
-					return test_data[TEST_DATA_LEN - 1];
-				};
-
-				struct DataSample s = get_sample();
-
-				log(S_BARO, T_PRESSURE, s.pressure, s.pressure);
-				log(S_IMU, T_FILTER_STATE, s.z_alt, s.z_speed, s.z_acc);
-				_pressure = s.pressure;
-				_attitude_rad = s.att;
-
-				// log real accelleration but under another type to not interfere with launch simulation
-				log(S_IMU, T_SYSLOG, ax, ay, az);
-#endif
 			} else {
 				// IMU reading was not ok, still predict with constant speed model
 				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
@@ -495,7 +369,7 @@ TASK imu_task(TaskDescriptor_t* self)
 					xSemaphoreGive(altitude_semaphore);
 				}
 			}
-			xSemaphoreGive(spi_semaphore);
+			xSemaphoreGive(i2c_semaphore);
 		}
 		TASK_WAIT_HZ(self, IMU_TASK_HZ);
 	}
@@ -504,262 +378,41 @@ TASK imu_task(TaskDescriptor_t* self)
 TASK barometer_task(TaskDescriptor_t* self)
 {
 	self->last_wake = xTaskGetTickCount();
-	BaroData sample1, sample2;
+	BaroData sample;
 
 	while (true) {
 		if (xSemaphoreTake(i2c_semaphore, portMAX_DELAY) == pdTRUE) {
-			barometer_read(&sample1, &sample2);
+			sample = barometer_read();
 
-			//first minute after setup check sensor health
+/*
+			// first minute after setup check sensor health
 			if (millis() - setup_finished_time_ms < GROUND_CHECK_TIMER_MS) {
-	
 				baro_healthy = is_baro_healthy_ground(sample1.pressure, sample2.pressure, sample1.temperature, sample2.temperature);
 				if (!baro_healthy) 	log(S_OTHER, T_SYSLOG, "Baro not healthy");
 			}
+*/
 
-			// FIXME: is the median really the best way to fuse the two barometer readings?
-			float alt = 0;
-			float pres = 0;
-			if (sample1.error_status == 0 && sample2.error_status == 0) {
-				alt = (sample1.altitude + sample2.altitude) / 2.0f;
-				pres = (sample1.pressure + sample2.pressure) / 2.0f;
-			} else if (sample1.error_status == 0) {
-				alt = sample1.altitude;
-				pres = sample1.pressure;
-			} else if (sample2.error_status == 0) {
-				alt = sample2.altitude;
-				pres = sample2.pressure;
+			// Update the altitude and vertical velocity estimation with the barometer data
+			if (sample.error_status == 0) {
+				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
+					altitude.update(sample.altitude);
+					_pressure = sample.pressure;
+					xSemaphoreGive(altitude_semaphore);
+				}
 			} else {
 				log(S_BARO, T_SYSLOG, "[ERR] Reading barometers");
 			}
 
-			// Update the altitude and vertical velocity estimation with the barometer data
-			if (sample1.error_status == 0 || sample2.error_status == 0) {
-				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
-					altitude.update(alt);
-					_pressure = pres;
-					xSemaphoreGive(altitude_semaphore);
-				}
-			}
-
-#if TEST_FAKE_DATA != 1
 			Vector3f fs = altitude.getState();
 			log(S_BARO, T_FILTER_STATE, fs[0], fs[1], fs[2]);
-			log(S_BARO, T_PRESSURE, sample1.pressure, sample2.pressure);
-			log(S_BARO, T_SYSLOG, sample1.altitude, sample2.altitude);
-			log(S_BARO, T_SYSLOG, sample1.temperature, sample2.temperature, -777.0f);
-#endif
+			log(S_BARO, T_PRESSURE, sample.pressure);
+			// FIME: make a barometric altitude and temperature log message
+			log(S_BARO, T_SYSLOG, sample.altitude);
+			log(S_BARO, T_SYSLOG, sample.temperature, -777.0f);
 
 			xSemaphoreGive(i2c_semaphore);
 		}
 	TASK_WAIT_HZ(self, BARO_TASK_HZ);
-	}
-}
-
-/*
-%%{init: {
-  "flowchart": {
-    "defaultRenderer": "elk",
-    "curve": "stepAfter"
-  }
-} }%%
-
-flowchart TD
-    A(((IDLE))) -->|Ignition| B((BOOST))
-    B -->|Burnout| C((COAST))
-    C -->|Apogee| D((DROGUE)) & a[/Activate main recovery\nActivate backup recovery/]
-    D -->|Low Altitude| E((MAIN)) & b[/Release main parachute/]
-    E -->|Touchdown| F((LANDED))
-    F .->|Reset| A
-
-    A ~~~ B ~~~ C ~~~ D ~~~ E ~~~ F
-*/
-TASK parachute_task(TaskDescriptor_t* self)
-{
-	self->last_wake = xTaskGetTickCount();
-	RocketState state = RS_IDLE;
-
-	// Sensor data each loop
-	float z_speed = 0;
-	float z_alt = 0;
-	float z_acc = 0;
-
-	// Number of consecutive samples that met the state change condition
-	int sample_count = 0;
-
-	int64_t last_state_change_time = millis();
-
-	bool cutter_1_active = false;
-	int64_t cutter_1_fire_time_ms = 0;
-
-	bool cutter_2_active = false;
-	int64_t cutter_2_fire_time = 0;
-
-	bool ematch_active = false;
-	int64_t ematch_fire_time = 0;
-
-	while (true) {
-		ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000 / PARACHUTE_TASK_HZ));
-
-		// Get the sensor data, if there is no new sensor data the old sample is
-		// used
-		LogMessage msg;
-		while (xQueueReceive(parachute_msg_queue, &msg, 0) == pdTRUE) {
-			if (msg.type == T_FILTER_STATE && msg.payload_type == P_FVEC3) {
-				z_alt = msg.payload.fv3.x;
-				z_speed = msg.payload.fv3.y;
-				z_acc = msg.payload.fv3.z;
-			}
-		}
-
-		// Non-blocking pyro pin timeout handling — runs every pass regardless
-		// of state so it can't stall queue draining
-		if (cutter_1_active && (millis() - cutter_1_fire_time_ms) >= CUTTERS_ON_TIME_MS) {
-			pinMode(PIN_CUTTER_1, OUTPUT);
-			digitalWrite(PIN_CUTTER_1, 0);
-			cutter_1_active = false;
-		}
-		if (cutter_2_active && (millis() - cutter_2_fire_time) >= CUTTERS_ON_TIME_MS) {
-			pinMode(PIN_CUTTER_2, OUTPUT);
-			digitalWrite(PIN_CUTTER_2, 0);
-			cutter_2_active = false;
-		}
-		//if (ematch_active && (millis() - ematch_fire_time) >= EMATCH_ON_TIME_MS) {
-		//	pinMode(PIN_EMATCH, OUTPUT);
-		//	digitalWrite(PIN_EMATCH, 0);
-		//	ematch_active = false;
-		//}
-
-		switch (state) {
-		case RS_IDLE:
-			// Only detect liftoff if the system is armed
-			if (system_armed) {
-				// Detect motor ignition
-				if (z_acc >= Z_ACC_BOOST_THRESHOLD_G && z_speed >= Z_SPEED_BOOST_THRESHOLD_MPS) {
-					sample_count++;
-				} else {
-					sample_count = 0;
-				}
-				
-				if (sample_count >= BOOST_DETECTION_SAMPLE_COUNT) {
-					last_state_change_time = millis();
-					state = RS_BOOST;
-					sample_count = 0;
-				}
-			}
-
-			// Check sensor health
-
-			break;
-
-		case RS_BOOST:
-			// Detect motor burnout
-			if (z_acc < 0 || z_alt > MAX_ALT_BURNOUT_M) {
-				sample_count++;
-			} else {
-				sample_count = 0;
-			}
-
-			if (sample_count >= BURNOUT_DETECTION_SAMPLE_COUNT) {
-				last_state_change_time = millis();
-				state = RS_COAST;
-				sample_count = 0;
-			}
-
-			break;
-
-		case RS_COAST:
-		if (z_alt > MIN_AIRBRAKE_ALT_M) {
-				static AirBrake petali;
-				float theta_pid_deg = petali.theta_update(z_alt, z_speed, _attitude_rad, _pressure);
-				//attuazione airbrake
-				log(S_PARA, T_SYSLOG, theta_pid_deg);
-				servo_write_deg(min(theta_pid_deg, 145.0f));
-				airbrake_active = true;
-			}
-
-			// Detect apogee
-			if (z_speed <= Z_SPEED_APOGEE_THRESHOLD_MPS) {
-				sample_count++;
-			} else {
-				sample_count = 0;
-			}
-
-			if (sample_count >= APOGEE_DETECTION_SAMPLE_COUNT) {
-				// Activate recovery A; pins are cleared later,
-				// non-blockingly, by the timeout check above
-				analogWrite(PIN_CUTTER_1, 256 / 2);
-				cutter_1_active = true;
-				cutter_1_fire_time_ms = millis();
-
-				//delay(EJECTION_CO2_DELAY_MS);
-
-				//digitalWrite(PIN_EMATCH, HIGH);
-				//ematch_active = true;
-				//ematch_fire_time = millis();
-
-
-				last_state_change_time = millis();
-				state = RS_DROGUE;
-				sample_count = 0;
-			}
-
-			break;
-
-		case RS_DROGUE:
-			servo_write_deg(0);
-			airbrake_active = false;
-
-			// Detect main parachute deployment
-			if (z_alt <= Z_ALT_MAIN_DEPLOYMENT_M) {
-				sample_count++;
-			} else {
-				sample_count = 0;
-			}
-
-			if (sample_count >= MAIN_DETECTION_SAMPLE_COUNT) {
-				// Cut main parachute; pin cleared later, non-blockingly
-				analogWrite(PIN_CUTTER_2, 256 / 2);
-				cutter_2_active = true;
-				cutter_2_fire_time = millis();
-
-				last_state_change_time = millis();
-				state = RS_MAIN;
-				sample_count = 0;
-			}
-
-			break;
-
-		case RS_MAIN:
-			// Detect touchdown
-			if (z_alt <= Z_ALT_TOUCHDOWN_M || fabs(z_speed) <= Z_SPEED_STATIONARY_MPS) {
-				sample_count++;
-			} else {
-				sample_count = 0;
-			}
-
-			if (sample_count >= TOUCHDOWN_DETECTION_SAMPLE_COUNT) {
-				last_state_change_time = millis();
-				state = RS_TOUCHDOWN;
-				sample_count = 0;
-			}
-
-			break;
-
-		case RS_TOUCHDOWN:
-			if (millis() - last_state_change_time > STOP_SD_WRITE_MS) {
-				enable_sd_card = false;
-			}
-			break;
-
-		default:
-			log(S_PARA, T_SYSLOG, "Unknown rocket state");
-			break;
-		}
-
-		// log rocket state for telemetry and debugging
-		rocket_state = state;
-		log(S_PARA, T_ROCKET_STATE, state);
 	}
 }
 
@@ -966,29 +619,10 @@ TASK cmd_handler_task(TaskDescriptor_t* self)
 		case CMD_CUT_MAIN:
 			log(cmd.src, T_SYSLOG, "Received command: CUT_MAIN");
 			break;
-		case CMD_CAMERAS_ON:
-			digitalWrite(PIN_CAMERA1, HIGH);
-			digitalWrite(PIN_CAMERA2, HIGH);
-			log(cmd.src, T_SYSLOG, "Received command: CAMERAS_ON");
-			break;
-		case CMD_CAMERAS_OFF:
-			digitalWrite(PIN_CAMERA1, LOW);
-			digitalWrite(PIN_CAMERA2, LOW);
-			log(cmd.src, T_SYSLOG, "Received command: CAMERAS_OFF");
-			break;
 		case CMD_SENSOR_CALIBRATION:
 			log(cmd.src, T_SYSLOG, "Received command: SENSOR_CALIBRATION");
-			// Calibrate only on the ramp, in flight this would stop the IMU
-			// and barometer tasks and reset the ground references
-			if (rocket_state != RS_IDLE || system_armed) {
-				log(cmd.src, T_SYSLOG, "Calibration refused, rocket is not idle");
-				break;
-			}
-			// IMU calibration
-			// FIXME: since IMU is on the same bus as the lora radio, taking this 
-			//        semaphore for the whole calibration process disconnects the
-			//        telemetry link temporarely
-			if (xSemaphoreTake(spi_semaphore, portMAX_DELAY) == pdTRUE) {
+			if (xSemaphoreTake(i2c_semaphore, portMAX_DELAY) == pdTRUE) {
+				// IMU calibration
 				float g_cal;
 				if (imu_calibrate(&g_cal, &gx_bias, &gy_bias, &gz_bias, IMU_CALIBRATION_TIME) == true) {
 					if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
@@ -998,10 +632,8 @@ TASK cmd_handler_task(TaskDescriptor_t* self)
 				} else {
 					log(cmd.src, T_SYSLOG, "IMU Calibration Failed");
 				}
-				xSemaphoreGive(spi_semaphore);
-			}
-			// Barometer Calibration
-			if (xSemaphoreTake(i2c_semaphore, portMAX_DELAY) == pdTRUE) {
+
+				// Barometer Calibration
 				if (barometer_calibrate(BARO_CALIBRATION_TIME) == false) {
 					log(cmd.src, T_SYSLOG, "Baro Calibration Failed");
 				}

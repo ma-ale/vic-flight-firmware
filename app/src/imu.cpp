@@ -5,8 +5,8 @@
 #include "logger.h"
 
 
-extern SPIClass SPI2;
-LSM6DSO32Sensor IMU(&SPI2, IMU_CS);
+extern TwoWire I2C1;
+LSM6DSO32Sensor IMU(&I2C1);
 static volatile bool interrupt_flag = false;
 
 
@@ -64,7 +64,7 @@ bool imu_setup()
 		log(S_IMU, T_SYSLOG, "[ERR] Change output data rate");
 		return false;
 	}
-	
+
 	// FIFO Interrupt
 //	IMU.Set_FIFO_Watermark_Level(IMU_FIFO_WATERMARK);
 //	pinMode(IMU_INT1, INPUT_PULLDOWN);
@@ -214,11 +214,11 @@ int imu_get_sample(FIFO_Sample *sample)
 bool is_imu_healthy_ground(float ax, float ay, float az, float gx, float gy, float gz) {
 
     static int count = 0;
-    static constexpr int max_count = 10; 
+    static constexpr int max_count = 10;
 
     //controllo threshold acc e gyro
 
-    constexpr float gyro_threshold = 5.0f; 
+    constexpr float gyro_threshold = 5.0f;
     bool gyro_thr_ok = std::abs(gx) < gyro_threshold && std::abs(gy) < gyro_threshold && std::abs(gz) < gyro_threshold;
 
 
@@ -227,10 +227,10 @@ bool is_imu_healthy_ground(float ax, float ay, float az, float gx, float gy, flo
     float gravity = std::sqrt(ax*ax + ay*ay + az*az);
     float gravity_threshold = 0.1f;
     bool gravity_ok = std::abs(gravity - 1.0f) < gravity_threshold;
-    
 
 
-    //controllo varianza 
+
+    //controllo varianza
     static constexpr int samples = 10;
     static constexpr float acc_variance_threshold = (10 * 5.4f * 0.001f) * (10 *5.4f * 0.001f);// 5.4 mg rumore minimo
     static constexpr float gyro_variance_threshold = (10 * 75.0f * 0.001f) * (10 * 75.0f * 0.001f); //75 mdps rumore minimo
@@ -238,7 +238,7 @@ bool is_imu_healthy_ground(float ax, float ay, float az, float gx, float gy, flo
     static float ax_samples[samples] = {};
     static float ay_samples[samples] = {};
     static float az_samples[samples] = {};
-    
+
     static float gx_samples[samples] = {};
     static float gy_samples[samples] = {};
     static float gz_samples[samples] = {};
@@ -289,9 +289,9 @@ bool is_imu_healthy_ground(float ax, float ay, float az, float gx, float gy, flo
         ax_variance /= samples; ay_variance /= samples; az_variance /= samples;
         gx_variance /= samples; gy_variance /= samples; gz_variance /= samples;
 
-        // Controllo che NESSUN asse sia congelato (varianza troppo piccola) 
+        // Controllo che NESSUN asse sia congelato (varianza troppo piccola)
         // e che NESSUN asse sia troppo rumoroso (varianza sopra il threshold)
-        variance_ok = 
+        variance_ok =
             (ax_variance < acc_variance_threshold && ax_variance > std::numeric_limits<float>::epsilon()) &&
             (ay_variance < acc_variance_threshold && ay_variance > std::numeric_limits<float>::epsilon()) &&
             (az_variance < acc_variance_threshold && az_variance > std::numeric_limits<float>::epsilon()) &&

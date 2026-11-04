@@ -112,8 +112,6 @@ enum LoRaCommand : uint8_t
 	CMD_EJECT_A            = 1,
 	CMD_EJECT_C            = 2,
 	CMD_CUT_MAIN           = 3,
-	CMD_CAMERAS_ON         = 4,
-	CMD_CAMERAS_OFF        = 5,
 	CMD_SENSOR_CALIBRATION = 6,
 	CMD_SYSTEM_ARM         = 7,
 	CMD_SYSTEM_DISARM      = 8,

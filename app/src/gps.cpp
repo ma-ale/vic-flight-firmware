@@ -16,8 +16,8 @@ void gps_setup(void)
 	// Some messages take very long to transmit (>1s checked with
 	// an oscilloscope), so we set a large buffer to avoid loosing data and
 	// on update set a timeout as to not slow down other tasks
-	Serial2.setTxBufferSize(GPS_SERIAL_BUFFER_SIZE);
-	Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+	Serial0.setTxBufferSize(GPS_SERIAL_BUFFER_SIZE);
+	Serial0.begin(9600, SERIAL_8N1);
 	// TODO: This module looses all configuration at startup, this would be the
 	// place to reload them
 }
@@ -32,8 +32,8 @@ void gps_update(GPSData *data)
 	// complete since this function is called periodically
 	uint32_t start = millis();
 	bool got_data = false;
-	while (Serial2.available() > 0 && millis() - start < GPS_SERIAL_READ_TIMEOUT_MS) {
-		parser.encode(Serial2.read());
+	while (Serial0.available() > 0 && millis() - start < GPS_SERIAL_READ_TIMEOUT_MS) {
+		parser.encode(Serial0.read());
 		got_data = true;
 		continue;
 	}
