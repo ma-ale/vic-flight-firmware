@@ -1,0 +1,31 @@
+---
+# Minimal clang-format configuration based on LLVM Style Guide
+# https://llvm.org/docs/CodingStandards.html
+
+BasedOnStyle: LLVM
+
+# Line length
+ColumnLimit: 120
+
+# Indentation
+IndentWidth: 4
+UseTab: ForIndentation
+TabWidth: 4
+
+# Spaces
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+
+# Braces and blocks
+BreakBeforeBraces: Linux
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: Inline
+
+# Pointers and references
+PointerAlignment: Left
+
+# Line breaks
+BreakBeforeTernaryOperators: true
+
+# Constructors
+PackConstructorInitializers: NextLineOnly
