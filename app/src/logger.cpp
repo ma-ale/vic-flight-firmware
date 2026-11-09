@@ -55,7 +55,7 @@ bool logger_sort_message(LogMessage* msg)
 	// https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/freertos_additions.html#ring-buffers
 	for (uint8_t i = 0; i < num_consumers; i++) {
 		if ((consumers[i].type_filter & msg->type) != 0 && (consumers[i].payload_filter & msg->payload_type) != 0) {
-			success &= xQueueSendToFront(consumers[i].msg_queue, msg, LOG_TIMEOUT) == pdPASS;
+			success &= xQueueSendToBack(consumers[i].msg_queue, msg, LOG_TIMEOUT) == pdPASS;
 			xTaskNotifyGive(consumers[i].task_handle);
 		}
 	}
@@ -89,9 +89,8 @@ void get_string_state(RocketState state, const char** out)
 		break;
 	}
 }
-size_t logger_message_to_str(const char** str, LogMessage* msg)
+size_t logger_message_to_str(char (&buf)[LOGGER_STRING_BUFFER_SIZE], LogMessage* msg)
 {
-	static char buf[256];
 	int n = 0;
 
 	if (!msg) {
@@ -239,7 +238,6 @@ size_t logger_message_to_str(const char** str, LogMessage* msg)
 		buf[sizeof(buf) - 1] = '\0';
 	}
 
-	*str = buf;
 	return n;
 }
 

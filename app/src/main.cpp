@@ -109,10 +109,12 @@ void lora_rx_cb(uint8_t* packet)
 void setup(void)
 {
 	/* ===================== PERIPHERAL INITIALIZATION ====================== */
+	Serial.setTxBufferSize(2048);
 	Serial.begin(115200);
-		while (!Serial) {
-			delay(100);
-		}
+	uint32_t t0 = millis();
+	while (!Serial && millis() - t0 < 3000) delay(10);
+	delay(300);
+	Serial.println();
 	Serial.println("Initialized");
 	Serial.printf("DBG reset reason: %d\n", (int)esp_reset_reason());
 /*
@@ -125,7 +127,7 @@ void setup(void)
 	Serial.println("Setting up I2C1");
 	I2C1.setPins(I2C1_SDA, I2C1_SCL);
 	I2C1.begin();
-	I2C1.setClock(100000);
+	I2C1.setClock(400000);
 
 	// put all chip selects high, the individual setup calls will handle them later
 	Serial.println("Setting up SPI2");
@@ -395,6 +397,7 @@ TASK sbus_task(TaskDescriptor_t* self)
 				}
 			}
 		}
+		vTaskDelay(1);
 	}
 }
 
@@ -630,7 +633,7 @@ TASK lora_transmitter_task(TaskDescriptor_t* self)
 			last_state = state;
 		}
 */
-		vTaskDelay(1);
+		TASK_WAIT_HZ(self, LORA_TX_TASK_HZ);
 	}
 }
 
@@ -642,10 +645,10 @@ TASK uart_task(TaskDescriptor_t* self)
 	while (true) {
 		ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000 / UART_TASK_HZ));
 		LogMessage msg;
-		const char* str;
+		char str[LOGGER_STRING_BUFFER_SIZE];
 		size_t len = 0;
 		while (xQueueReceive(uart_msg_queue, &msg, 0) == pdTRUE) {
-			len = logger_message_to_str(&str, &msg);
+			len = logger_message_to_str(str, &msg);
 			Serial.write(str, len);
 		}
 	}
@@ -661,11 +664,12 @@ TASK sd_formatter_task(TaskDescriptor_t* self)
 		LogMessage msg;
 
 		while (xQueueReceive(sd_msg_queue, &msg, 0) == pdTRUE) {
-			const char* str = NULL;
-			size_t len = logger_message_to_str(&str, &msg);
-			if (enable_sd_card == true) {
-				sdcard_write(str, len);
+			if (enable_sd_card == false) {
+				continue;
 			}
+			char str[LOGGER_STRING_BUFFER_SIZE];
+			size_t len = logger_message_to_str(str, &msg);
+			sdcard_write(str, len);
 		}
 	}
 }
@@ -675,7 +679,9 @@ TASK sd_writer_task(TaskDescriptor_t* self)
 	self->last_wake = xTaskGetTickCount();
 
 	while (true) {
-		sdcard_flush();
+		if (enable_sd_card == true) {
+			sdcard_flush();
+		}
 		TASK_WAIT_HZ(self, SD_WRITER_TASK_HZ);
 	}
 }

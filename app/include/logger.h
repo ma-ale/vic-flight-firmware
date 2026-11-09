@@ -10,6 +10,7 @@
 #define MESSAGE_PAYLOAD_TYPE_ENCODED_BITS 4
 #define SOURCE_SUBSYSTEM_ENCODED_BITS 3
 #define MESSAGE_TYPE_ENCODED_BITS 4
+#define LOGGER_STRING_BUFFER_SIZE 256
 
 /// @brief Log message structure
 /// @note Let @b n be the number of entries,
@@ -97,7 +98,7 @@ typedef struct {
 bool logger_register_consumer(TaskHandle_t task_handle, QueueHandle_t msg_queue,
                               uint32_t payload_filter, uint32_t type_filter);
 bool logger_sort_message(LogMessage* msg);
-size_t logger_message_to_str(const char** str, LogMessage* msg);
+size_t logger_message_to_str(char (&buffer)[LOGGER_STRING_BUFFER_SIZE], LogMessage* msg);
 /// @brief Serializes a LogMessage into a byte array.
 ///
 /// The order follows the LogMessage struct:
