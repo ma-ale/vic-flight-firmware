@@ -27,7 +27,7 @@ Adafruit_Mahony orientation;
 KalmanFilter altitude;
 
 // sbus to read the radio controller input
-bfs::SbusRx sbus(&Serial2, RC_SBUS, -1, true);
+bfs::SbusRx sbus(&Serial2, RC_SBUS, -1, false);
 
 // Enables SD card writing
 static bool enable_sd_card = true;
@@ -391,9 +391,9 @@ TASK sbus_task(TaskDescriptor_t* self)
 			bfs::SbusData data = sbus.data();
 			for (int i = 0; i < 16; i++) {
 				if (SBUS_CHANNEL_MAP[i] != nullptr) {
-					int angle = (int)((data.ch[i] / 255.0) * 180.0);
-					Serial.printf("SERVO %d: %d\n", i, angle);
-					//SBUS_CHANNEL_MAP[i]->write(angle);
+					int angle = map(data.ch[i], SBUS_MIN, SBUS_MAX, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+					//Serial.printf("SERVO %d: %d\n", i, angle);
+					SBUS_CHANNEL_MAP[i]->write(angle);
 				}
 			}
 		}
@@ -649,7 +649,7 @@ TASK uart_task(TaskDescriptor_t* self)
 		size_t len = 0;
 		while (xQueueReceive(uart_msg_queue, &msg, 0) == pdTRUE) {
 			len = logger_message_to_str(str, &msg);
-			Serial.write(str, len);
+			//Serial.write(str, len);
 		}
 	}
 }
