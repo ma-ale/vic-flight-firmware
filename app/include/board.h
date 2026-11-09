@@ -120,5 +120,5 @@
 // Others
 #define GROUND_CHECK_TIMER_MS            60*1000
 #define DBG_LED_PWM                      255/3
-#define SERVO_MIN_US  500
-#define SERVO_MAX_US 2500
+#define SERVO_MIN_US 1000
+#define SERVO_MAX_US 2000

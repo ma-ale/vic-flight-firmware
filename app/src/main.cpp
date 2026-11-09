@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <FreeRTOS.h>
 #include <sbus.h>
+#include <ESP32Servo.h>
 
 #include "Bluetooth.hpp"
 #include "KalmanFilter.hpp"
@@ -109,9 +110,9 @@ void setup(void)
 {
 	/* ===================== PERIPHERAL INITIALIZATION ====================== */
 	Serial.begin(115200);
-	//	while (!Serial) {
-	//		delay(100);
-	//	}
+		while (!Serial) {
+			delay(100);
+		}
 	Serial.println("Initialized");
 	Serial.printf("DBG reset reason: %d\n", (int)esp_reset_reason());
 /*
@@ -121,11 +122,13 @@ void setup(void)
 	digitalWrite(PIN_DBG_LED, LOW);
 */
 
+	Serial.println("Setting up I2C1");
 	I2C1.setPins(I2C1_SDA, I2C1_SCL);
 	I2C1.begin();
 	I2C1.setClock(100000);
 
 	// put all chip selects high, the individual setup calls will handle them later
+	Serial.println("Setting up SPI2");
 	pinMode(LORA_CS, OUTPUT);
 	digitalWrite(LORA_CS, HIGH);
 
@@ -133,6 +136,7 @@ void setup(void)
 
 
 	/* ===================== SEMAPHORES INITIALIZATION ====================== */
+	Serial.println("Initializing Semaphores");
 	INIT_STATIC_SEMAPHORE(spi_semaphore);
 	INIT_STATIC_SEMAPHORE(i2c_semaphore);
 	INIT_STATIC_SEMAPHORE(altitude_semaphore);
@@ -149,6 +153,7 @@ void setup(void)
 
 
 	/* ======================= QUEUES INITIALIZATION ======================== */
+	Serial.println("Initializing Queues");
 	INIT_STATIC_QUEUE(parachute_msg_queue);
 	INIT_STATIC_QUEUE(sd_msg_queue);
 	INIT_STATIC_QUEUE(uart_msg_queue);
@@ -169,8 +174,11 @@ void setup(void)
 
 
 	/* ================= LOGGING & TELEMETRY INITIALIZATION ================= */
+	Serial.println("Initializing Logging Subsystem");
 	logger_init();
 
+/*
+	Serial.println("Initializing SD Card");
 	if (!sdcard_init()) {
 		while (true) {
 			Serial.println("SD init failed");
@@ -186,20 +194,28 @@ void setup(void)
 		}
 	}
 	sdcard_open_log();
+*/
+	enable_sd_card = false;
 
+/*
+	Serial.println("Initializing Bluetooth");
 	ble_init({.on_command =
 	              [](uint8_t command, void* context) {
 		              (void)context;
 		              gs_command_enqueue(S_BLE, command, 0);
 	              },
 	          .context = nullptr});
+*/
 
+/*
+	Serial.println("Initializing LoRa Radio");
 	lora_setup(BAND_L, LORA_CHANNEL, TX_FORCE, LORA_FC_ID, false);
 	lora_set_tx_packet_cb(lora_tx_cb);
 	lora_set_rx_packet_cb(lora_rx_cb);
-
+*/
 
 	/* ======================= SENSORS INITIALIZATION ======================= */
+	Serial.println("Initializing IMU");
 	if (imu_setup() == false) {
 		// FIXME: telemetry should receive this error state
 		while (true) {
@@ -207,6 +223,7 @@ void setup(void)
 			delay(1000);
 		}
 	}
+	Serial.println("Calibrating IMU");
 	float g_cal;
 	if (imu_calibrate(&g_cal, &gx_bias, &gy_bias, &gz_bias, IMU_CALIBRATION_TIME) == false) {
 		while (true) {
@@ -216,12 +233,14 @@ void setup(void)
 	}
 	altitude.setG(g_cal);
 
+	Serial.println("Initializing Barometer");
 	if (barometer_setup() == false) {
 		while (true) {
 			log(S_OTHER, T_SYSLOG, "Barometer setup failed");
 			delay(1000);
 		}
 	}
+	Serial.println("Calibrating Barometer");
 	if (barometer_calibrate(BARO_CALIBRATION_TIME) == false) {
 		while (true) {
 			log(S_OTHER, T_SYSLOG, "Barometer calibration failed");
@@ -229,9 +248,11 @@ void setup(void)
 		}
 	}
 
+	Serial.println("Initializing GPS");
 	gps_setup();
 
 	/* ======================== TASKS INITIALIZATION ======================== */
+	Serial.println("Initializing Tasks");
 	// Core 0 tasks
 	INIT_STATIC_TASK(sbus_task, "sbus", NULL, tskIDLE_PRIORITY + 11, 0);
 	INIT_STATIC_TASK(imu_task, "imu", NULL, tskIDLE_PRIORITY + 10, 0);
@@ -273,6 +294,7 @@ void setup(void)
 
 	// Register consumer tasks to the logger, these tasks will get notified when
 	// new data is ready to be read
+	Serial.println("Registering Logging Consumers");
 	logger_register_consumer(lora_formatter_task_descriptor.handle, lora_msg_queue, 0xffff, 0xffff);
 	logger_register_consumer(sd_formatter_task_descriptor.handle, sd_msg_queue, 0xffff, 0xffff);
 	logger_register_consumer(uart_task_descriptor.handle, uart_msg_queue, 0xffff, 0xffff);
@@ -327,9 +349,52 @@ TASK sbus_task(TaskDescriptor_t* self)
 	self->last_wake = xTaskGetTickCount();
 	sbus.Begin();
 
+	static Servo s_flap_r;
+	static Servo s_flap_l;
+	static Servo s_aile_r;
+	static Servo s_aile_l;
+	static Servo s_tail_r;
+	static Servo s_tail_l;
+
+	s_flap_r.attach(SRV_FLAP_R, SERVO_MIN_US, SERVO_MAX_US);
+	s_flap_l.attach(SRV_FLAP_L, SERVO_MIN_US, SERVO_MAX_US);
+	s_aile_r.attach(SRV_AILE_R, SERVO_MIN_US, SERVO_MAX_US);
+	s_aile_l.attach(SRV_AILE_L, SERVO_MIN_US, SERVO_MAX_US);
+	s_tail_r.attach(SRV_TAIL_R, SERVO_MIN_US, SERVO_MAX_US);
+	s_tail_l.attach(SRV_TAIL_L, SERVO_MIN_US, SERVO_MAX_US);
+
+	#define MAX_SBUS_CHANNELS 16
+	static Servo * const SBUS_CHANNEL_MAP[MAX_SBUS_CHANNELS] = {
+		[0]  = &s_flap_r,
+		[1]  = &s_flap_l,
+		[2]  = &s_aile_r,
+		[3]  = &s_aile_l,
+		[4]  = &s_tail_r,
+		[5]  = &s_tail_l,
+		[6]  = nullptr,
+		[7]  = nullptr,
+		[8]  = nullptr,
+		[9]  = nullptr,
+		[10] = nullptr,
+		[11] = nullptr,
+		[12] = nullptr,
+		[13] = nullptr,
+		[14] = nullptr,
+		[15] = nullptr,
+	};
+
+
 	while (true) {
-		sbus.Read();
-		vTaskDelay(1);
+		if (sbus.Read()) {
+			bfs::SbusData data = sbus.data();
+			for (int i = 0; i < 16; i++) {
+				if (SBUS_CHANNEL_MAP[i] != nullptr) {
+					int angle = (int)((data.ch[i] / 255.0) * 180.0);
+					Serial.printf("SERVO %d: %d\n", i, angle);
+					//SBUS_CHANNEL_MAP[i]->write(angle);
+				}
+			}
+		}
 	}
 }
 
@@ -466,7 +531,7 @@ TASK ble_formatter_task(TaskDescriptor_t* self)
 		LogMessage msg;
 
 		while (xQueueReceive(ble_msg_queue, &msg, 0) == pdTRUE) {
-			ble_send_log_message(msg);
+			//ble_send_log_message(msg);
 		}
 	}
 }
@@ -539,6 +604,7 @@ TASK lora_transmitter_task(TaskDescriptor_t* self)
 	LoRaProtoState last_state = STATE_DISCONNECTED;
 
 	while (true) {
+/*
 		// Run the lora radio state machine
 		LoRaProtoState state = lora_fc_state_machine();
 		String str;
@@ -563,6 +629,7 @@ TASK lora_transmitter_task(TaskDescriptor_t* self)
 			log(S_LORA, T_SYSLOG, state);
 			last_state = state;
 		}
+*/
 		vTaskDelay(1);
 	}
 }

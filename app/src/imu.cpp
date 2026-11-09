@@ -6,7 +6,7 @@
 
 
 extern TwoWire I2C1;
-LSM6DSO32Sensor IMU(&I2C1);
+LSM6DSO32Sensor IMU(&I2C1, LSM6DSO32_I2C_ADD_L);
 static volatile bool interrupt_flag = false;
 
 
@@ -24,27 +24,35 @@ static void IRAM_ATTR imu_fifo_interrupt()
 bool imu_setup()
 {
 	if (IMU.begin() != 0) {
-		log(S_IMU, T_SYSLOG, "[ERR] Failed to initialize IMU");
+		// FIXME: Since tasks are initialized after sensor initialization these logs are lost
+		Serial.println("[ERR] Failed to initialize IMU");
+		//log(S_IMU, T_SYSLOG, "[ERR] Failed to initialize IMU");
 		return false;
 	}
 
+/* ONLY FOR SPI
 	// Should be 0x6C
 	uint8_t id;
 	if (IMU.ReadID(&id) != 0) {
-		log(S_IMU, T_SYSLOG, "[ERR] Get ID");
+		Serial.println("[ERR] Get ID");
+		//log(S_IMU, T_SYSLOG, "[ERR] Get ID");
 		return false;
 	}
 	if (id != 0x6C) {
-		log(S_IMU, T_SYSLOG, "[ERR] ID mismatch");
-	}
+		Serial.println("[ERR] ID mismatch");
+		//log(S_IMU, T_SYSLOG, "[ERR] ID mismatch");
+}
+*/
 
 	if (IMU.Enable_X() !=0 || IMU.Enable_G() != 0) {
-		log(S_IMU, T_SYSLOG, "[ERR] Enable gyro or accel");
+		Serial.println("[ERR] Enable gyro or accel");
+		//log(S_IMU, T_SYSLOG, "[ERR] Enable gyro or accel");
 		return false;
 	}
 
 	if (IMU.Set_X_FS(IMU_ACCEL_FS) != 0 || IMU.Set_G_FS(IMU_GYRO_FS) != 0) {
-		log(S_IMU, T_SYSLOG, "[ERR] Change FS");
+		Serial.println("[ERR] Change FS");
+		//log(S_IMU, T_SYSLOG, "[ERR] Change FS");
 		return false;
 	}
 
