@@ -357,6 +357,15 @@ TASK sbus_task(TaskDescriptor_t* self)
 	static Servo s_aile_l;
 	static Servo s_tail_r;
 	static Servo s_tail_l;
+	static Servo esc;
+
+	s_flap_r.setPeriodHertz(50);
+	s_flap_l.setPeriodHertz(50);
+	s_aile_r.setPeriodHertz(50);
+	s_aile_l.setPeriodHertz(50);
+	s_tail_r.setPeriodHertz(50);
+	s_tail_l.setPeriodHertz(50);
+	esc.setPeriodHertz(50);
 
 	s_flap_r.attach(SRV_FLAP_R, SERVO_MIN_US, SERVO_MAX_US);
 	s_flap_l.attach(SRV_FLAP_L, SERVO_MIN_US, SERVO_MAX_US);
@@ -364,16 +373,17 @@ TASK sbus_task(TaskDescriptor_t* self)
 	s_aile_l.attach(SRV_AILE_L, SERVO_MIN_US, SERVO_MAX_US);
 	s_tail_r.attach(SRV_TAIL_R, SERVO_MIN_US, SERVO_MAX_US);
 	s_tail_l.attach(SRV_TAIL_L, SERVO_MIN_US, SERVO_MAX_US);
+	esc.attach(ESC_FORWARD, SERVO_MIN_US, SERVO_MAX_US);
 
 	#define MAX_SBUS_CHANNELS 16
 	static Servo * const SBUS_CHANNEL_MAP[MAX_SBUS_CHANNELS] = {
 		[0]  = &s_flap_r,
 		[1]  = &s_flap_l,
-		[2]  = &s_aile_r,
-		[3]  = &s_aile_l,
-		[4]  = &s_tail_r,
-		[5]  = &s_tail_l,
-		[6]  = nullptr,
+		[2]  = &esc,
+		[3]  = &s_aile_r,
+		[4]  = &s_aile_l,
+		[5]  = &s_tail_r,
+		[6]  = &s_tail_l,
 		[7]  = nullptr,
 		[8]  = nullptr,
 		[9]  = nullptr,
@@ -385,16 +395,52 @@ TASK sbus_task(TaskDescriptor_t* self)
 		[15] = nullptr,
 	};
 
+	static bool lost_comm = true;
+	static bool in_failsafe = true;
+	static int lost_frames = 0;
+	const int max_consecutive_lost_frames = 20;
 
 	while (true) {
 		if (sbus.Read()) {
 			bfs::SbusData data = sbus.data();
-			for (int i = 0; i < 16; i++) {
-				if (SBUS_CHANNEL_MAP[i] != nullptr) {
-					int angle = map(data.ch[i], SBUS_MIN, SBUS_MAX, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
-					//Serial.printf("SERVO %d: %d\n", i, angle);
-					SBUS_CHANNEL_MAP[i]->write(angle);
+			if (data.lost_frame) {
+				lost_frames++;
+				if (lost_frames > max_consecutive_lost_frames) {
+					lost_comm = true;
 				}
+			} else if (lost_comm) {
+				--lost_frames;
+				if (lost_frames <= 0) {
+					lost_frames = 0;
+					lost_comm = false;
+				}
+			}
+			if (data.failsafe || lost_comm) {
+				in_failsafe = true;
+			} else {
+				in_failsafe = false;
+			}
+
+			if (!in_failsafe) {
+				for (int i = 0; i < MAX_SBUS_CHANNELS; i++) {
+					if (SBUS_CHANNEL_MAP[i] != nullptr) {
+						int raw = constrain(data.ch[i], SBUS_MIN, SBUS_MAX);
+						int angle = map(raw, SBUS_MIN, SBUS_MAX, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+						Serial.printf("SERVO %d: %d\n", i, angle);
+						SBUS_CHANNEL_MAP[i]->write(angle);
+					}
+				}
+			} else {
+				Serial.printf("In failsafe: data.failsafe=%d, lost_comm=%d, lost_frames=%d)\n", data.failsafe, lost_comm, lost_frames);
+				// NOTE: in failsafe HOLD the last values, this
+				//       below stops all servos and motors returning
+				//       to neutral position
+				// for (int i = 0; i < MAX_SBUS_CHANNELS; i++) {
+				// 	if (SBUS_CHANNEL_MAP[i] != nullptr) {
+				// 		// 90 degrees is the neutral position for all servos, including the ESC
+				// 		SBUS_CHANNEL_MAP[i]->write(90);
+				// 	}
+				// }
 			}
 		}
 		vTaskDelay(1);
