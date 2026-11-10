@@ -84,7 +84,8 @@
 
 
 // LoRa configuration
-#define LORA_OUTPUT_POWER     0     // dBm, da capire
+#define LORA_MODULE_E282G4M12S
+#define LORA_OUTPUT_POWER   -13     // dBm, da capire
 #define LORA_CHANNEL          1
 #define LORA_SPREADING_FACTOR 7     // minimo spread factor
 #define LORA_CODING_RATE      5     // 4 + 1, 1 bit su 8 di correzione di errore

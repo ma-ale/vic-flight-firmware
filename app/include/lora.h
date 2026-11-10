@@ -44,6 +44,10 @@ enum FrequencyBands {
 	BAND_M,
 	BAND_N,
 	BAND_O,
+	BAND_ISM2400_BW203,
+	BAND_ISM2400_BW406,
+	BAND_ISM2400_BW812,
+	BAND_ISM2400_BW1625,
 };
 
 
@@ -127,9 +131,9 @@ struct [[gnu::packed]] LoRaCommandPacket
 
 struct BandRequirements {
 	float freq_start_mhz;  // Start of the frequency band
-	int   ch_bw_khz;       // (max) bandwidth that the channel supports
+	float ch_bw_khz;       // (max) bandwidth that the channel supports
 	int   num_channels;    // Number of channels given the bandwith
-	int   max_power_mw;    // Maximum effective radiated power
+	float max_power_dbm;    // Maximum effective radiated power
 	float max_duty;        // Maximum transmission duty cycle (see spec)
 	bool  polite_access;   // Channel supports polite access for transmission
 };

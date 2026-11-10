@@ -209,12 +209,12 @@ void setup(void)
 	          .context = nullptr});
 */
 
-/*
+
 	Serial.println("Initializing LoRa Radio");
-	lora_setup(BAND_L, LORA_CHANNEL, TX_FORCE, LORA_FC_ID, false);
+	lora_setup(BAND_ISM2400_BW812, LORA_CHANNEL, TX_FORCE, LORA_FC_ID, false);
 	lora_set_tx_packet_cb(lora_tx_cb);
 	lora_set_rx_packet_cb(lora_rx_cb);
-*/
+
 
 	/* ======================= SENSORS INITIALIZATION ======================= */
 	Serial.println("Initializing IMU");
