@@ -170,7 +170,7 @@ void setup(void)
 	Serial.println("Initializing Logging Subsystem");
 	logger_init();
 
-/*
+#if defined(ENABLE_SD)
 	Serial.println("Initializing SD Card");
 	if (!sdcard_init()) {
 		while (true) {
@@ -187,10 +187,10 @@ void setup(void)
 		}
 	}
 	sdcard_open_log();
-*/
-	enable_sd_card = false;
+	enable_sd_card = true;
+#endif
 
-/*
+#if defined(ENABLE_BLE)
 	Serial.println("Initializing Bluetooth");
 	ble_init({.on_command =
 	              [](uint8_t command, void* context) {
@@ -198,7 +198,7 @@ void setup(void)
 		              gs_command_enqueue(S_BLE, command, 0);
 	              },
 	          .context = nullptr});
-*/
+#endif
 
 
 	Serial.println("Initializing LoRa Radio");
@@ -540,7 +540,12 @@ TASK ble_formatter_task(TaskDescriptor_t* self)
 		LogMessage msg;
 
 		while (xQueueReceive(ble_msg_queue, &msg, 0) == pdTRUE) {
+#if defined(ENABLE_BLE)
 			//ble_send_log_message(msg);
+#else
+			(void)msg;
+			delay(1);
+#endif
 		}
 	}
 }
@@ -658,6 +663,7 @@ TASK uart_task(TaskDescriptor_t* self)
 }
 
 // SD consumer
+// FIXME: it is called formatter task, but it both formats and writes to the SD card.
 TASK sd_formatter_task(TaskDescriptor_t* self)
 {
 	self->last_wake = xTaskGetTickCount();
@@ -667,12 +673,17 @@ TASK sd_formatter_task(TaskDescriptor_t* self)
 		LogMessage msg;
 
 		while (xQueueReceive(sd_msg_queue, &msg, 0) == pdTRUE) {
+#if defined(ENABLE_SD)
 			if (enable_sd_card == false) {
 				continue;
 			}
 			char str[LOGGER_STRING_BUFFER_SIZE];
 			size_t len = logger_message_to_str(str, &msg);
 			sdcard_write(str, len);
+#else
+			(void)msg;
+			delay(1);
+#endif
 		}
 	}
 }
@@ -682,9 +693,11 @@ TASK sd_writer_task(TaskDescriptor_t* self)
 	self->last_wake = xTaskGetTickCount();
 
 	while (true) {
+#if defined(ENABLE_SD)
 		if (enable_sd_card == true) {
 			sdcard_flush();
 		}
+#endif
 		TASK_WAIT_HZ(self, SD_WRITER_TASK_HZ);
 	}
 }
