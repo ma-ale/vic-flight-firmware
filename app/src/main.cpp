@@ -5,7 +5,6 @@
 #include <ESP32Servo.h>
 
 #include "Bluetooth.hpp"
-#include "KalmanFilter.hpp"
 #include "barometer.h"
 #include "board.h"
 #include "gps.h"
@@ -22,10 +21,6 @@ TwoWire I2C1(0);
 // State filter for orientation estimation, used in the IMU task
 Adafruit_Mahony orientation;
 
-// Altitude and veritcal velocity state filter, used to sense when to deploy
-// the parachute
-KalmanFilter altitude;
-
 // sbus to read the radio controller input
 bfs::SbusRx sbus(&Serial2, RC_SBUS, -1, false);
 
@@ -36,7 +31,6 @@ static int64_t setup_finished_time_ms;
 // flags
 static bool imu_healthy = true;
 static bool baro_healthy = true;
-static bool airbrake_active = false;
 bool system_armed = true; // FIXME: SYSTEM SHOULD BE STARTED DISARMED
 
 // calibration
@@ -50,7 +44,6 @@ DECLARE_STATIC_SEMAPHORE(lora_tx_packet_semaphore);
 
 DECLARE_STATIC_SEMAPHORE(spi_semaphore);
 DECLARE_STATIC_SEMAPHORE(i2c_semaphore);
-DECLARE_STATIC_SEMAPHORE(altitude_semaphore);
 
 DECLARE_STATIC_TASK(imu_task);
 DECLARE_STATIC_TASK(sbus_task);
@@ -141,12 +134,10 @@ void setup(void)
 	Serial.println("Initializing Semaphores");
 	INIT_STATIC_SEMAPHORE(spi_semaphore);
 	INIT_STATIC_SEMAPHORE(i2c_semaphore);
-	INIT_STATIC_SEMAPHORE(altitude_semaphore);
 	INIT_STATIC_SEMAPHORE(lora_tx_packet_semaphore);
 	if (spi_semaphore == NULL            ||
 	    i2c_semaphore == NULL            ||
-	    lora_tx_packet_semaphore == NULL ||
-	    altitude_semaphore == NULL) {
+	    lora_tx_packet_semaphore == NULL) {
 		while (true) {
 			Serial.println("Error creating semaphore");
 			delay(500);
@@ -233,7 +224,6 @@ void setup(void)
 			delay(1000);
 		}
 	}
-	altitude.setG(g_cal);
 
 	Serial.println("Initializing Barometer");
 	if (barometer_setup() == false) {
@@ -472,37 +462,16 @@ TASK imu_task(TaskDescriptor_t* self)
 				}
 */
 
-				// Mahony filter quaternions
-				float qw, qx, qy, qz;
-
 				// Update the relative orientation of the board using
 				// the Mahony filter, readings are in mg and mdps, so
 				// conversion is needed
 				orientation.updateIMU(gx, gy, gz, ax, ay, az);
-				orientation.getQuaternion(&qw, &qx, &qy, &qz);
 
-				// Update the altitude and vertical velocity estimation
-				// with the inertial data
-				float cos_tilt = constrain(1 - 2*(qx*qx + qy*qy), -1.0f, 1.0f);
-				float attitude_rad = acosf(cos_tilt); // same as acos(cos p * cos r) but NaN-safe
-				float vertical_accel = 2*(qx*qz - qw*qy) * ax + 2*(qy*qz + qw*qx) * ay + (1 - 2*(qx*qx + qy*qy)) * az;
-				// TODO: airbrake trigger
-				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
-					altitude.predict(vertical_accel, attitude_rad, airbrake_active, true);
-					xSemaphoreGive(altitude_semaphore);
-				}
-
-				Vector3f fs = altitude.getState();
 				log(S_IMU, T_ORIENTATION, orientation.getRoll(), orientation.getPitch(), orientation.getYaw());
 				log(S_IMU, T_ACCELLERATION, sample.accelerometer[0], sample.accelerometer[1], sample.accelerometer[2]);
 				log(S_IMU, T_GYRO, gx, gy, gz);
-				log(S_IMU, T_FILTER_STATE, fs[0], fs[1], fs[2]);
 			} else {
-				// IMU reading was not ok, still predict with constant speed model
-				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
-					altitude.predict(0, 0, airbrake_active, false);
-					xSemaphoreGive(altitude_semaphore);
-				}
+				log(S_IMU, T_SYSLOG, "[ERR] IMU Get sample");
 			}
 			xSemaphoreGive(i2c_semaphore);
 		}
@@ -529,16 +498,10 @@ TASK barometer_task(TaskDescriptor_t* self)
 
 			// Update the altitude and vertical velocity estimation with the barometer data
 			if (sample.error_status == 0) {
-				if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
-					altitude.update(sample.altitude);
-					xSemaphoreGive(altitude_semaphore);
-				}
 			} else {
 				log(S_BARO, T_SYSLOG, "[ERR] Reading barometers");
 			}
 
-			Vector3f fs = altitude.getState();
-			log(S_BARO, T_FILTER_STATE, fs[0], fs[1], fs[2]);
 			log(S_BARO, T_PRESSURE, sample.pressure);
 			// FIME: make a barometric altitude and temperature log message
 			log(S_BARO, T_SYSLOG, sample.altitude);
@@ -597,13 +560,6 @@ TASK lora_formatter_task(TaskDescriptor_t* self)
 		xSemaphoreTake(lora_tx_packet_semaphore, portMAX_DELAY);
 		while (xQueueReceive(lora_msg_queue, &msg, 0) == pdTRUE) {
 			switch (msg.type) {
-			case T_FILTER_STATE:
-				if (msg.payload_type == P_FVEC3) {
-					lora_tx_packet.imu.altitude = float16(msg.payload.fv3.x).getBinary();
-					lora_tx_packet.imu.vspeed = float16(msg.payload.fv3.y).getBinary();
-					lora_tx_packet.imu.dt = msg.timestamp / 1000 - u48le_to_u64(lora_tx_packet.header.tx_time);
-				}
-				break;
 			case T_ORIENTATION: {
 				if (msg.payload_type == P_FVEC3) {
 					// FIXME: don't repeat this computation here
@@ -629,11 +585,6 @@ TASK lora_formatter_task(TaskDescriptor_t* self)
 					lora_tx_packet.gps.latitude = msg.payload.fv2.x;
 					lora_tx_packet.gps.longitude = msg.payload.fv2.y;
 					lora_tx_packet.gps.dt = msg.timestamp / 1000 - u48le_to_u64(lora_tx_packet.header.tx_time);
-				}
-				break;
-			case T_ROCKET_STATE:
-				if (msg.payload_type == P_ROCKET_STATE) {
-					lora_tx_packet.state = (uint8_t)msg.payload.state;
 				}
 				break;
 			default:
@@ -764,10 +715,7 @@ TASK cmd_handler_task(TaskDescriptor_t* self)
 				// IMU calibration
 				float g_cal;
 				if (imu_calibrate(&g_cal, &gx_bias, &gy_bias, &gz_bias, IMU_CALIBRATION_TIME) == true) {
-					if (xSemaphoreTake(altitude_semaphore, portMAX_DELAY) == pdTRUE) {
-						altitude.setG(g_cal);
-						xSemaphoreGive(altitude_semaphore);
-					}
+					log(cmd.src, T_SYSLOG, "IMU Calibration Successful");
 				} else {
 					log(cmd.src, T_SYSLOG, "IMU Calibration Failed");
 				}

@@ -63,32 +63,7 @@ bool logger_sort_message(LogMessage* msg)
 	return success;
 }
 
-void get_string_state(RocketState state, const char** out)
-{
-	switch (state) {
-	case RS_IDLE:
-		*out = "IDLE";
-		break;
-	case RS_BOOST:
-		*out = "BOOST";
-		break;
-	case RS_COAST:
-		*out = "COAST";
-		break;
-	case RS_DROGUE:
-		*out = "DROGUE";
-		break;
-	case RS_MAIN:
-		*out = "MAIN";
-		break;
-	case RS_TOUCHDOWN:
-		*out = "TOUCHDOWN";
-		break;
-	default:
-		*out = "Unknown state";
-		break;
-	}
-}
+
 size_t logger_message_to_str(char (&buf)[LOGGER_STRING_BUFFER_SIZE], LogMessage* msg)
 {
 	int n = 0;
@@ -164,9 +139,6 @@ size_t logger_message_to_str(char (&buf)[LOGGER_STRING_BUFFER_SIZE], LogMessage*
 	case T_GYRO:
 		n += snprintf(buf + n, sizeof(buf) - n, "GYRO");
 		break;
-	case T_FILTER_STATE:
-		n += snprintf(buf + n, sizeof(buf) - n, "FLT");
-		break;
 	case T_ORIENTATION:
 		n += snprintf(buf + n, sizeof(buf) - n, "ORIEN");
 		break;
@@ -181,9 +153,6 @@ size_t logger_message_to_str(char (&buf)[LOGGER_STRING_BUFFER_SIZE], LogMessage*
 		break;
 	case T_SYSLOG:
 		n += snprintf(buf + n, sizeof(buf) - n, "LOG");
-		break;
-	case T_ROCKET_STATE:
-		n += snprintf(buf + n, sizeof(buf) - n, "STATE");
 		break;
 	default:
 		n += snprintf(buf + n, sizeof(buf) - n, "UNK");
@@ -219,11 +188,6 @@ size_t logger_message_to_str(char (&buf)[LOGGER_STRING_BUFFER_SIZE], LogMessage*
 		break;
 	case P_STRING:
 		n += snprintf(buf + n, sizeof(buf) - n, "%s", msg->payload.s ? msg->payload.s : "null");
-		break;
-	case P_ROCKET_STATE:
-		const char* out;
-		get_string_state(msg->payload.state, &out);
-		n += snprintf(buf + n, sizeof(buf) - n, "%s", out);
 		break;
 	default:
 		n += snprintf(buf + n, sizeof(buf) - n, "?");
@@ -312,10 +276,6 @@ size_t logger_message_to_bytes(uint8_t* dest, size_t payload_string_max_length, 
 		break;
 	}
 
-	case P_ROCKET_STATE:
-		memcpy(dest, &msg->payload.state, sizeof(msg->payload.state));
-		dest += sizeof(msg->payload.state);
-		break;
 	default: // P_NONE or unknown payload type, do nothing
 		break;
 	} // switch
@@ -411,16 +371,5 @@ void log(SourceSubsystem src, MessageType type, const char* s)
 	msg.src = src;
 	msg.type = type;
 	msg.payload.s = s;
-	logger_sort_message(&msg);
-}
-
-void log(SourceSubsystem src, MessageType type, RocketState state)
-{
-	LogMessage msg;
-	msg.timestamp = now_us();
-	msg.payload_type = P_ROCKET_STATE;
-	msg.src = src;
-	msg.type = type;
-	msg.payload.state = state;
 	logger_sort_message(&msg);
 }

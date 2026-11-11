@@ -25,7 +25,6 @@ enum MessagePayloadType : uint16_t {
 	P_FVEC2 = 1 << 6,
 	P_FVEC3 = 1 << 7,
 	P_STRING = 1 << 8,
-	P_ROCKET_STATE = 1 << 9,
 };
 
 /// @brief Log message structure
@@ -48,22 +47,11 @@ enum SourceSubsystem : uint8_t {
 enum MessageType : uint16_t {
 	T_ACCELLERATION = 1 << 0, // IMU acceleration
 	T_GYRO          = 1 << 1, // IMU gyroscope
-	T_FILTER_STATE  = 1 << 2, // Kalman filter state (altitude, vertical speed and acceleration)
-	T_PRESSURE      = 1 << 3, // Barometer pressure
-	T_TEMPERATURE   = 1 << 4, // Barometer temperature
-	T_GPS           = 1 << 5, // GPS latitude and longitude
-	T_SYSLOG        = 1 << 6,
-	T_ORIENTATION   = 1 << 7, // Mahony filter orientation (roll, pitch, yaw)
-	T_ROCKET_STATE  = 1 << 8, // Rocket state (idle, boost, coast, drogue, main, landed)
-};
-
-enum RocketState : uint8_t {
-	RS_IDLE      = 0, // Idle state, on ramp
-	RS_BOOST     = 1, // Motor burning, ascending
-	RS_COAST     = 2, // Motor burnt out, still ascending
-	RS_DROGUE    = 3, // Drogue deployed, falling
-	RS_MAIN      = 4, // Main parachute deployed, falling
-	RS_TOUCHDOWN = 5, // On ground
+	T_PRESSURE      = 1 << 2, // Barometer pressure
+	T_TEMPERATURE   = 1 << 3, // Barometer temperature
+	T_GPS           = 1 << 4, // GPS latitude and longitude
+	T_SYSLOG        = 1 << 5,
+	T_ORIENTATION   = 1 << 6, // Mahony filter orientation (roll, pitch, yaw)
 };
 
 typedef struct {
@@ -76,7 +64,6 @@ typedef struct {
 		float f;
 		double d;
 		int i;
-		RocketState state;
 		long l;
 		struct {
 			float x, y;
@@ -146,7 +133,6 @@ void log(SourceSubsystem src, MessageType type, long l);
 void log(SourceSubsystem src, MessageType type, float x, float y);
 void log(SourceSubsystem src, MessageType type, float x, float y, float z);
 void log(SourceSubsystem src, MessageType type, const char* s);
-void log(SourceSubsystem src, MessageType type, RocketState state);
 
 bool logger_init(void);
 
