@@ -207,25 +207,10 @@ void u64_to_u48le(uint64_t u64, uint8_t *u48)
 	u48[5] = (uint8_t)(u64 >> 40);
 }
 
-// FIXME
+
 static void adjust_time(void *p)
 {
-	switch (((LoRaPacketHeader*)p)->type) {
-	case PKT_DATA: {
-		LoRaDataPacket *d = (LoRaDataPacket*)p;
-		// adjust time from packet creation to packet transmission start
-		uint64_t base = u48le_to_u64(d->header.tx_time);
-		uint64_t now = now_ms();
-		u64_to_u48le(now, d->header.tx_time);
-		d->imu.dt = d->imu.dt + base - now;
-		d->baro.dt = d->baro.dt + base - now;
-		d->gps.dt = d->gps.dt + base - now; // FIXME: GPS dt should be in decisenconds or smt
-		break;
-	}
-	default:
-		u64_to_u48le(now_ms(), ((LoRaPacketHeader*)p)->tx_time);
-		break;
-	}
+	u64_to_u48le(now_ms(), ((LoRaPacketHeader*)p)->tx_time);
 }
 
 

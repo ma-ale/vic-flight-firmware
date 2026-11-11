@@ -88,23 +88,17 @@ struct [[gnu::packed]] LoRaDataPacket
 {
 	LoRaPacketHeader header;
 	struct {
-		uint16_t altitude; // float16, changed to uint16_t for packing
-		uint16_t vspeed;   // float16, changed to uint16_t for packing
-		uint16_t attitude; // float16, changed to uint16_t for packing
-		int16_t dt;
-	} imu;
-	struct {
-		uint16_t p1;       // float16 hPa, changed to uint16_t for packing
-		uint16_t p2;       // float16 hPa, changed to uint16_t for packing
-		int16_t dt;
-	} baro;
+		int16_t ax, ay, az; // float16 type changed for packing
+		int16_t gx, gy, gz;
+		int16_t roll, pitch, yaw;
+		int16_t pressure;
+		int8_t  temperature; // degrees Celsius
+	} sensors;
 	struct {
 		float latitude;
 		float longitude;
 		int16_t dt;
 	} gps;
-	uint8_t state;
-	uint8_t sensor_status;
 };
 
 // Ground station command ids. The same ids are the single byte written to the
@@ -113,9 +107,6 @@ struct [[gnu::packed]] LoRaDataPacket
 enum LoRaCommand : uint8_t
 {
 	CMD_NONE               = 0,
-	CMD_EJECT_A            = 1,
-	CMD_EJECT_C            = 2,
-	CMD_CUT_MAIN           = 3,
 	CMD_SENSOR_CALIBRATION = 6,
 	CMD_SYSTEM_ARM         = 7,
 	CMD_SYSTEM_DISARM      = 8,

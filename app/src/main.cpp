@@ -498,14 +498,11 @@ TASK barometer_task(TaskDescriptor_t* self)
 
 			// Update the altitude and vertical velocity estimation with the barometer data
 			if (sample.error_status == 0) {
+				log(S_BARO, T_PRESSURE, sample.pressure);
+				log(S_BARO, T_TEMPERATURE, sample.temperature);
 			} else {
 				log(S_BARO, T_SYSLOG, "[ERR] Reading barometers");
 			}
-
-			log(S_BARO, T_PRESSURE, sample.pressure);
-			// FIME: make a barometric altitude and temperature log message
-			log(S_BARO, T_SYSLOG, sample.altitude);
-			log(S_BARO, T_SYSLOG, sample.temperature, -777.0f);
 
 			xSemaphoreGive(i2c_semaphore);
 		}
@@ -560,24 +557,36 @@ TASK lora_formatter_task(TaskDescriptor_t* self)
 		xSemaphoreTake(lora_tx_packet_semaphore, portMAX_DELAY);
 		while (xQueueReceive(lora_msg_queue, &msg, 0) == pdTRUE) {
 			switch (msg.type) {
-			case T_ORIENTATION: {
+			case T_ACCELLERATION:
 				if (msg.payload_type == P_FVEC3) {
-					// FIXME: don't repeat this computation here
-					float r = msg.payload.fv3.x * 0.0174533;   // roll in radians
-					float p = msg.payload.fv3.y * 0.0174533;   // pitch in radians
-					float a = acos(cos(p) * cos(r)) * 57.2958; // total pitch from vertical in degrees
-
-					lora_tx_packet.imu.attitude = float16(a).getBinary();
-					lora_tx_packet.imu.dt = msg.timestamp / 1000 - u48le_to_u64(lora_tx_packet.header.tx_time);
+					lora_tx_packet.sensors.ax = float16(msg.payload.fv3.x).getBinary();
+					lora_tx_packet.sensors.ay = float16(msg.payload.fv3.y).getBinary();
+					lora_tx_packet.sensors.az = float16(msg.payload.fv3.z).getBinary();
 				}
 				break;
-			}
+			case T_GYRO:
+				if (msg.payload_type == P_FVEC3) {
+					lora_tx_packet.sensors.gx = float16(msg.payload.fv3.x).getBinary();
+					lora_tx_packet.sensors.gy = float16(msg.payload.fv3.y).getBinary();
+					lora_tx_packet.sensors.gz = float16(msg.payload.fv3.z).getBinary();
+				}
+				break;
+			case T_ORIENTATION:
+				if (msg.payload_type == P_FVEC3) {
+					lora_tx_packet.sensors.roll = float16(msg.payload.fv3.x).getBinary();
+					lora_tx_packet.sensors.pitch = float16(msg.payload.fv3.y).getBinary();
+					lora_tx_packet.sensors.yaw = float16(msg.payload.fv3.z).getBinary();
+				}
+				break;
 			case T_PRESSURE:
-				if (msg.payload_type == P_FVEC2) {
+				if (msg.payload_type == P_FLOAT) {
 					// Pa -> hPa: float16 max is 65504, so Pa would overflow
-					lora_tx_packet.baro.p1 = float16(msg.payload.fv2.x / 100.0f).getBinary();
-					lora_tx_packet.baro.p2 = float16(msg.payload.fv2.y / 100.0f).getBinary();
-					lora_tx_packet.baro.dt = msg.timestamp / 1000 - u48le_to_u64(lora_tx_packet.header.tx_time);
+					lora_tx_packet.sensors.pressure = float16(msg.payload.f / 100.0f).getBinary();
+				}
+				break;
+			case T_TEMPERATURE:
+				if (msg.payload_type == P_FLOAT) {
+					lora_tx_packet.sensors.temperature = (int8_t)msg.payload.f;
 				}
 				break;
 			case T_GPS:
@@ -591,9 +600,7 @@ TASK lora_formatter_task(TaskDescriptor_t* self)
 				break;
 			}
 		}
-		// TODO: this should be better
-		lora_tx_packet.state |= system_armed << 7;
-		lora_tx_packet.sensor_status = imu_healthy << 0 | baro_healthy << 1;
+
 		xSemaphoreGive(lora_tx_packet_semaphore);
 	}
 }
@@ -604,7 +611,6 @@ TASK lora_transmitter_task(TaskDescriptor_t* self)
 	LoRaProtoState last_state = STATE_DISCONNECTED;
 
 	while (true) {
-/*
 		// Run the lora radio state machine
 		LoRaProtoState state = lora_fc_state_machine();
 		String str;
@@ -629,7 +635,7 @@ TASK lora_transmitter_task(TaskDescriptor_t* self)
 			log(S_LORA, T_SYSLOG, state);
 			last_state = state;
 		}
-*/
+
 		TASK_WAIT_HZ(self, LORA_TX_TASK_HZ);
 	}
 }
@@ -699,15 +705,6 @@ TASK cmd_handler_task(TaskDescriptor_t* self)
 		switch (cmd.command) {
 		case CMD_NONE:
 			log(cmd.src, T_SYSLOG, "Received command: NONE");
-			break;
-		case CMD_EJECT_A:
-			log(cmd.src, T_SYSLOG, "Received command: EJECT_A");
-			break;
-		case CMD_EJECT_C:
-			log(cmd.src, T_SYSLOG, "Received command: EJECT_C");
-			break;
-		case CMD_CUT_MAIN:
-			log(cmd.src, T_SYSLOG, "Received command: CUT_MAIN");
 			break;
 		case CMD_SENSOR_CALIBRATION:
 			log(cmd.src, T_SYSLOG, "Received command: SENSOR_CALIBRATION");
