@@ -367,13 +367,13 @@ TASK sbus_task(TaskDescriptor_t* self)
 
 	#define MAX_SBUS_CHANNELS 16
 	static Servo * const SBUS_CHANNEL_MAP[MAX_SBUS_CHANNELS] = {
-		[0]  = &s_flap_r,
-		[1]  = &s_flap_l,
+		[0]  = &s_aile_l,
+		[1]  = &s_aile_r,
 		[2]  = &esc,
-		[3]  = &s_aile_r,
-		[4]  = &s_aile_l,
-		[5]  = &s_tail_r,
-		[6]  = &s_tail_l,
+		[3]  = &s_tail_l,
+		[4]  = &s_tail_r,
+		[5]  = &s_flap_l,
+		[6]  = &s_flap_r,
 		[7]  = nullptr,
 		[8]  = nullptr,
 		[9]  = nullptr,
